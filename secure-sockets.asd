@@ -5,7 +5,7 @@
   :version nil
   :author "Brian Kamotho"
   :license "BSD-3-Clause"
-  :description "An implementation of the Transport Layer Security Protocols"
+  :description "A higher-level API to cl-tls"
 
   :depends-on ("usocket" "bordeaux-threads"
 			 "trivial-gray-streams" "cl-tls")
