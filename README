@@ -1,0 +1,4 @@
+Secure-sockets uses usocket, bordeaux-therads, trivial-gray-streams,
+and cl-tls to provide a simple API for socket communication.
+
+This software is in an experimental state.
