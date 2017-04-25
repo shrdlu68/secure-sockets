@@ -16,8 +16,7 @@
 (deftype octet-vector ()
   '(simple-array octet *))
 
-(defclass secure-socket
-    (trivial-gray-streams:fundamental-binary-stream)
+(defclass secure-socket (trivial-gray-streams:fundamental-binary-stream)
   ((cl-tls-read-cb :initarg :read-cb
 		   :accessor read-cb)
    (cl-tls-write-cb :initarg :write-cb
@@ -34,7 +33,6 @@
     (cond ((and read-buffer
 		(= read-buffer-position (length read-buffer)))
 	   (setf read-buffer (funcall cl-tls-read-cb))
-	   (format t "~&RB: ~S~%" read-buffer)
 	   (setf read-buffer-position 1)
 	   (aref read-buffer 0))
 	  (t
@@ -72,9 +70,16 @@
   (with-slots (write-buffer-position) ss
     (setf write-buffer-position 0)))
 
+(defmethod cl-tls:request-stream-to-address ((addr cl-tls:address))
+  (usocket:socket-stream (usocket:socket-connect
+			  (cl-tls:host addr) (cl-tls:port addr)
+			  :protocol :stream
+			  :element-type '(unsigned-byte 8))))
+
 (defun connect (host &key (port 443) certificate private-key
 		       (ca-certificates *default-ca-certs-location*)
 		       include-ciphers exclude-ciphers)
+  "Connect to a server using the given options"
   (let* ((sock (usocket:socket-connect
 		host port
 		:protocol :stream
