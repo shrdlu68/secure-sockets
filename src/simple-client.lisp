@@ -16,7 +16,9 @@
 (deftype octet-vector ()
   '(simple-array octet *))
 
-(defclass secure-socket (trivial-gray-streams:fundamental-binary-stream)
+(defclass secure-socket (trivial-gray-streams:fundamental-binary-input-stream
+			 trivial-gray-streams:fundamental-binary-output-stream
+			 trivial-gray-streams:trivial-gray-stream-mixin)
   ((cl-tls-read-cb :initarg :read-cb
 		   :accessor read-cb)
    (cl-tls-write-cb :initarg :write-cb
@@ -30,17 +32,20 @@
 
 (defmethod trivial-gray-streams:stream-read-byte ((ss secure-socket))
   (with-slots (cl-tls-read-cb read-buffer read-buffer-position) ss
-    (cond ((and read-buffer
-		(= read-buffer-position (length read-buffer)))
-	   (setf read-buffer (funcall cl-tls-read-cb))
-	   (setf read-buffer-position 1)
-	   (aref read-buffer 0))
-	  (t
-	   (or read-buffer
-	       (setf read-buffer (funcall cl-tls-read-cb)))
-	   (let ((uint8 (aref read-buffer read-buffer-position)))
-	     (incf read-buffer-position)
-	     uint8)))))
+    (handler-case
+	(cond ((and read-buffer
+		    (= read-buffer-position (length read-buffer)))
+	       (setf read-buffer (or (funcall cl-tls-read-cb)
+				     (return-from trivial-gray-streams:stream-read-byte nil)))
+	       (setf read-buffer-position 1)
+	       (aref read-buffer 0))
+	      (t
+	       (or read-buffer
+		   (setf read-buffer (funcall cl-tls-read-cb)))
+	       (let ((uint8 (aref read-buffer read-buffer-position)))
+		 (incf read-buffer-position)
+		 uint8)))
+      (stream-error (err) :eof))))
 
 (defmethod trivial-gray-streams:stream-write-byte ((ss secure-socket) uint8)
   (with-slots (cl-tls-write-cb write-buffer write-buffer-position) ss
@@ -54,17 +59,62 @@
 	   (incf write-buffer-position)
 	   uint8))))
 
+(defmethod trivial-gray-streams:stream-read-sequence ((ss secure-socket) sequence start end &key)
+  (with-slots (cl-tls-read-cb read-buffer read-buffer-position) ss
+    (unless start (setf start 0))
+    (unless end (setf end (length sequence)))
+    (let ((pos start)
+	  (len (- (or end (length sequence)) start))
+	  (read-buffer-len (length read-buffer)))
+      ;; Read from the read buffer if there's any unread data
+      (when (< read-buffer-position read-buffer-len)
+	(cond ((<= len (- read-buffer-len read-buffer-position))
+	       (replace sequence read-buffer
+			:start1 start :end1 end
+			:start2 read-buffer-position)
+	       (incf read-buffer-position len)
+	       (return-from trivial-gray-streams:stream-read-sequence end))
+	      (t
+	       (replace sequence read-buffer
+			:start1 start :start2 read-buffer-position)
+	       (incf pos (- read-buffer-len read-buffer-position))
+	       (setf read-buffer-position read-buffer-len))))
+      (loop
+	 for res = (handler-case (funcall cl-tls-read-cb)
+		     (stream-error (err) nil))
+	 for res-len = (and res (length res))
+	 for needed-len = (- end pos)
+	 do
+	   (if res
+	       (cond ((<= res-len needed-len)
+		      (replace sequence res :start1 pos)
+		      (if (= needed-len res-len)
+			  (return end)
+			  (incf pos res-len)))
+		     (t
+		      (replace sequence res :start1 pos :end1 end)
+		      (setf read-buffer res)
+		      (setf read-buffer-position needed-len)
+		      (return end)))
+	       (return pos))))))
+
+(defmethod trivial-gray-streams:stream-write-sequence ((ss secure-socket) sequence start end &key)
+  (with-slots (cl-tls-write-cb write-buffer write-buffer-position) ss
+    (funcall cl-tls-write-cb (subseq sequence start end))))
+
 (defmethod trivial-gray-streams:stream-finish-output ((ss secure-socket))
   (with-slots (cl-tls-write-cb write-buffer write-buffer-position) ss
     (when (plusp write-buffer-position)
-      (funcall cl-tls-write-cb (subseq write-buffer 0
-				       (min (1- (length write-buffer))
-					    write-buffer-position)))
-      (setf write-buffer-position 0))
-    t))
+      (funcall cl-tls-write-cb (subseq write-buffer 0 write-buffer-position))
+      (setf write-buffer-position 0)
+      nil)))
 
 (defmethod trivial-gray-streams:stream-force-output ((ss secure-socket))
-  (trivial-gray-streams:stream-finish-output ss))
+  (with-slots (cl-tls-write-cb write-buffer write-buffer-position) ss
+    (when (plusp write-buffer-position)
+      (funcall cl-tls-write-cb (subseq write-buffer 0 write-buffer-position))
+      (setf write-buffer-position 0)
+      nil)))
 
 (defmethod trivial-gray-streams:stream-clear-output ((ss secure-socket))
   (with-slots (write-buffer-position) ss
